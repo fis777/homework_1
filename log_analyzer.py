@@ -22,6 +22,7 @@ config = {
     "LOG_DIR": "./log"
 }
 
+
 def nginx_log_file_descrptor(log_dir):
     full_path = log_dir+'/nginx-access-ui.log-'+datetime.date.today().strftime('%Y%m%d')
     if os.path.exists(full_path + '.gz'):
@@ -39,6 +40,7 @@ def already_parsed(timestamp_dir):
             return True
     return False
 
+# Возвращает количество строк в логе
 def line_counter(log_dir):
     log = nginx_log_file_descrptor(log_dir)
     if log is not None:
@@ -153,7 +155,6 @@ def make_timestamp(timestamp_dir):
         return False
     datetime_stamp.write(str(datetime.datetime.now()))
     datetime_stamp.close()
-    logging.info('Successfull parsed')
     return True
 
 
@@ -212,10 +213,11 @@ def main():
         #Непосредственно сам парсинг
         table = parsing(config['LOG_DIR'],config['REPORT_SIZE'])
 
+        report_generate(config["REPORT_DIR"],str(table))
+
         # Timestamp
         make_timestamp(config['TIMESTAMP_DIR'])
-
-        report_generate(config["REPORT_DIR"],str(table))
+        logging.info('Successfull parsed')
 
     except:
         # Все остальные ошибки с трейсбеком пишем в лог
