@@ -7,14 +7,11 @@ class SimpleTest(unittest.TestCase):
         self.assertEqual(log_analyzer.median([1,2,3]), 2)
 
     def test_already_parsed(self):
-        self.assertEqual(log_analyzer.already_parsed('./tmp'), False,'Повторный запуск парсера')
+        self.assertEqual(log_analyzer.already_parsed('./reports'), False,'Повторный запуск парсера')
 
-    def test_line_counter(self):
-        self.assertNotEqual(log_analyzer.line_counter('./log'),0)
-
-    # Указан несуществующий путь, возвращает нулевое количество записей в логе
-    def test_line_counter_zero(self):
-        self.assertEqual(log_analyzer.line_counter('./logs'),0)
+    # Указан несуществующий путь, возвращает None
+    def test_parsing(self):
+        self.assertEqual(log_analyzer.parsing('./logs',100),None)
 
     def test_report_generate(self):
         self.assertTrue(log_analyzer.report_generate('./reports',' '))

@@ -22,55 +22,45 @@ config = {
     "LOG_DIR": "./log"
 }
 
-
-def nginx_log_file_descrptor(log_dir):
-    full_path = log_dir+'/nginx-access-ui.log-'+datetime.date.today().strftime('%Y%m%d')
-    if os.path.exists(full_path + '.gz'):
-        return gzip.open(full_path + '.gz','r')
-    if os.path.exists(full_path):
-        return open(full_path)
-    return None
-
 # Проверка на повторный запуск парсера
-def already_parsed(timestamp_dir):
-    if os.path.exists(timestamp_dir + '/log_analizer.ts'):
-        stat = os.stat(timestamp_dir + '/log_analizer.ts')
+def already_parsed(report_dir):
+    full_path = os.path.join(report_dir, 'timestamp.ts')
+    if os.path.exists(full_path):
+        stat = os.stat(full_path)
         #Если совпадают дата файла и текущая дата
         if datetime.date.fromtimestamp(stat.st_ctime) == datetime.date.today():
             return True
     return False
 
-# Возвращает количество строк в логе
-def line_counter(log_dir):
-    log = nginx_log_file_descrptor(log_dir)
-    if log is not None:
-        counter = len(log.readlines())
-        log.close()
-    else:
-        counter = 0
-    return counter
-
 def parsing(log_dir,report_size):
+
+    file_name = 'nginx-access-ui.log-' + datetime.date.today().strftime('%Y%m%d')
+    full_path = os.path.join(log_dir, file_name)
+    
+    log = None
+    if os.path.exists(full_path + '.gz'):
+        log = gzip.open(full_path + '.gz','r')
+    if os.path.exists(full_path):
+        log = open(full_path)
+    if log is None:
+        # Если нечего обрабатывать выходим
+        return log
+
+    # Kоличество записей в логе
+    counter = sum(1 for line in log)
+    log.seek(0)
+
     # Счетчик необработанных записей
     line_counter_error = 0
     #Сумма request_time всех запросов
     request_time_sum = 0
-    # Kоличество записей в логе
-    counter = line_counter(log_dir)
-    if counter == 0:
-        logging.error("Log file is empty or not exist")
-        return None
 
     # В результате обработки получаем справочник вида:
     # table_log = {'URL1':[request_time1,request_time2,,,,],'URL2':[request_time1,request_time2,,,,],,,}
     # для последующего рассчета необходимых данных
     table_log = {}
-    nginx_log = nginx_log_file_descrptor(log_dir)
-    if nginx_log is None:
-        logging.error("Log is not exist")
-        return None
 
-    for line in nginx_log:
+    for line in log:
         try:
             # Если обрабатываем '.gz'
             if type(line) is bytes:
@@ -78,11 +68,10 @@ def parsing(log_dir,report_size):
             current_url = line.split(' ')[7]
             request_time = float(line.split(' ')[-1])
         except:
-            logging.error(u'Is not added: %s' % line)
             line_counter_error += 1
             #Если количество ошибочных записей больше 20% от общего числа выходим с ошибкой
             if line_counter_error > counter/5:
-                logging.error(u'Too many errors')
+                logging.error('Too many errors')
                 return None
         else:
             #Добавляем в справочник
@@ -92,7 +81,7 @@ def parsing(log_dir,report_size):
                 #Если еще не встречался такой URL добавляем
                 table_log[current_url] = [request_time]
             request_time_sum += request_time
-    nginx_log.close()
+    log.close()
 
     #Заполняем расчетные поля
     table = [{'count': len(table_log[item]),
@@ -127,17 +116,18 @@ def median(list_request_time):
         # то медианой является среднее значение ряда. Например, в ряду 5, 8, 12, 25, 30 медиана $М_{d }$= 12
         return list_request_time[half_quantity]
 
-
-
 def report_generate(report_dir,report_data):
 
     substr = '$table_json'
+    full_path_template = os.path.join(report_dir, 'report.html')
     try:
-        report_template = open(report_dir + '/report.html', 'r')
+        report_template = open(full_path_template, 'r')
     except FileNotFoundError:
         logging.error('No HTML template in %s' % report_dir)
         return False
-    daily_report = open(report_dir + '/report-' + datetime.date.today().strftime('%Y%m%d') + '.html','w')
+
+    full_path_report =  os.path.join(report_dir, 'report-' + datetime.date.today().strftime('%Y%m%d') + '.html')
+    daily_report = open(full_path_report,'w')
     for line in report_template:
         if line.find(substr):
             line = line.replace(substr, report_data)
@@ -147,76 +137,59 @@ def report_generate(report_dir,report_data):
     daily_report.close()
     return True
 
-def make_timestamp(timestamp_dir):
+def make_timestamp(report_dir):
     try:
-        datetime_stamp = open(timestamp_dir + '/log_analizer.ts', 'w')
+        datetime_stamp = open(os.path.join(report_dir, 'timestamp.ts'), 'w')
     except FileNotFoundError:
-        logging.error('No timestamp file stamped')
+        logging.error('Path %s is not exist. Timestamp is not created.', report_dir)
         return False
     datetime_stamp.write(str(datetime.datetime.now()))
     datetime_stamp.close()
     return True
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default="settings.ini")
+    return parser.parse_args()
 
 def main():
 
-    # Дефолтное значение пути к конфигу
-    config_path = 'settings.ini'
-    # Получаем путь к конфигу из параметра командной строки (если указан)
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str)
-    arg = parser.parse_args()
-    if arg.config:
-        config_path = arg.config
-    # Если не найден конфиг завершаем работу
-    if not os.path.exists(config_path):
-        return
+    # Получаем путь к конфигу из параметра командной строки (если указан, если не указан то 'settings.ini' в текущей директории)
+    args = parse_args()
     # Парсим конфиг
-    config_file = configparser.ConfigParser()
-    config_file.read(config_path)
-    if config_file.has_option("Settings","report_size"):
-        config['REPORT_SIZE'] = config_file.getint("Settings","report_size")
-    if config_file.has_option("Settings", "report_dir"):
-        config['REPORT_DIR'] = config_file.get("Settings", "report_dir")
-    if config_file.has_option("Settings", "log_dir"):
-        config['LOG_DIR'] = config_file.get("Settings", "log_dir")
-    if config_file.has_option("Settings", "analyzer_log_dir"):
-        config['ANALYZER_LOG_DIR'] = config_file.get("Settings", "analyzer_log_dir")
-    if config_file.has_option("Settings", "timestamp_dir"):
-        config['TIMESTAMP_DIR'] = config_file.get("Settings", "timestamp_dir")
+    conf_file = configparser.ConfigParser()
+    conf_file.read(args.config)
+    for name,value in conf_file.items("Settings"):
+        config[name.upper()] = value
 
+    # Платформонезависимый полный путь
+    log_dir = os.path.realpath(config['LOG_DIR'])
+    report_dir = os.path.realpath(config['REPORT_DIR'])
 
     #Настраиваем логирование для нашего парсера
-    if "ANALYZER_LOG_DIR" in config:
-        try:
-            logging.basicConfig(format= u'[%(asctime)s] %(levelname)-6s %(message)s',
-                                filename = config['ANALYZER_LOG_DIR'] + '/log_analiser.log',level = logging.INFO)
-        except FileNotFoundError:
+    try:
+        logging.basicConfig(format= u'[%(asctime)s] %(levelname)-6s %(message)s',
+                                filename = os.path.join(log_dir, 'log_analyzer.log'),level = logging.INFO)
+    except FileNotFoundError:
             logging.basicConfig(format=u'[%(asctime)s] %(levelname)-6s %(message)s', filename=None, level=logging.INFO)
-            logging.error('ANALYZER_LOG_DIR defined but not exist')
-            return
-    else:
-        logging.basicConfig(format= u'[%(asctime)s] %(levelname)-6s %(message)s',filename = None,level = logging.INFO)
-    logging.info('Started')
-
+    
     try:
         #Если лог за сегодня обработан ничего не делаем
-        if already_parsed(config['TIMESTAMP_DIR']):
+        if already_parsed(report_dir):
             logging.error("Today log already parced")
             return
 
-        # Если лог за сегодня пустой или его нет ничего не делаем
-        if line_counter(config['LOG_DIR']) == 0:
-            logging.error("Today log empty or not exist")
+        #Непосредственно сам парсинг
+        logging.info("Start")
+        table = parsing(log_dir,int(config['REPORT_SIZE']))
+        if table is None:
+            logging.error("Log or path %s is not exist",log_dir)
             return
 
-        #Непосредственно сам парсинг
-        table = parsing(config['LOG_DIR'],config['REPORT_SIZE'])
-
-        report_generate(config["REPORT_DIR"],str(table))
+        report_generate(report_dir,str(table))
 
         # Timestamp
-        make_timestamp(config['TIMESTAMP_DIR'])
+        make_timestamp(report_dir)
         logging.info('Successfull parsed')
 
     except:
