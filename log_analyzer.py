@@ -22,24 +22,16 @@ config = {
     "LOG_DIR": "./log"
 }
 
-# Проверка на повторный запуск парсера
-def already_parsed(report_dir):
-    full_path = os.path.join(report_dir, 'timestamp.ts')
-    if os.path.exists(full_path):
-        stat = os.stat(full_path)
-        #Если совпадают дата файла и текущая дата
-        if datetime.date.fromtimestamp(stat.st_ctime) == datetime.date.today():
-            return True
-    return False
-
 def parsing(log_dir,report_size):
 
     file_name = 'nginx-access-ui.log-' + datetime.date.today().strftime('%Y%m%d')
     full_path = os.path.join(log_dir, file_name)
     
     log = None
+    gz = False
     if os.path.exists(full_path + '.gz'):
         log = gzip.open(full_path + '.gz','r')
+        gz = True
     if os.path.exists(full_path):
         log = open(full_path)
     if log is None:
@@ -63,7 +55,7 @@ def parsing(log_dir,report_size):
     for line in log:
         try:
             # Если обрабатываем '.gz'
-            if type(line) is bytes:
+            if gz:
                 line = line.decode('utf-8')
             current_url = line.split(' ')[7]
             request_time = float(line.split(' ')[-1])
@@ -116,6 +108,10 @@ def median(list_request_time):
         # то медианой является среднее значение ряда. Например, в ряду 5, 8, 12, 25, 30 медиана $М_{d }$= 12
         return list_request_time[half_quantity]
 
+# Полный путь к файлу отчета за текущую дату
+def full_path_report(report_dir):
+    return os.path.join(report_dir, 'report-' + datetime.date.today().strftime('%Y%m%d') + '.html')
+
 def report_generate(report_dir,report_data):
 
     substr = '$table_json'
@@ -126,8 +122,7 @@ def report_generate(report_dir,report_data):
         logging.error('No HTML template in %s' % report_dir)
         return False
 
-    full_path_report =  os.path.join(report_dir, 'report-' + datetime.date.today().strftime('%Y%m%d') + '.html')
-    daily_report = open(full_path_report,'w')
+    daily_report = open(full_path_report(report_dir),'w')
     for line in report_template:
         if line.find(substr):
             line = line.replace(substr, report_data)
@@ -136,6 +131,20 @@ def report_generate(report_dir,report_data):
     report_template.close()
     daily_report.close()
     return True
+
+def report_generate_new(report_dir,report_data):
+	# Проходим по 'report.html', заменяем подстроку '$table_json' на report_data
+	# и записываем в daily_report.
+	substr = '$table_json'
+	full_path_template = os.path.join(report_dir, 'report.html')
+	
+	with open(full_path_report(report_dir),'w') as daily_report:
+		with open(full_path_template,'r') as report_template:
+			for line in report_template:
+				if line.find(substr):
+					line = line.replace(substr, report_data)
+				daily_report.writelines(line)
+	return True
 
 def make_timestamp(report_dir):
     try:
@@ -174,8 +183,8 @@ def main():
             logging.basicConfig(format=u'[%(asctime)s] %(levelname)-6s %(message)s', filename=None, level=logging.INFO)
     
     try:
-        #Если лог за сегодня обработан ничего не делаем
-        if already_parsed(report_dir):
+        #Если уже существует файл отчета за текущую дату ничего не делаем.
+        if os.path.exists( full_path_report(report_dir) ):
             logging.error("Today log already parced")
             return
 
@@ -186,7 +195,7 @@ def main():
             logging.error("Log or path %s is not exist",log_dir)
             return
 
-        report_generate(report_dir,str(table))
+        report_generate_new(report_dir,str(table))
 
         # Timestamp
         make_timestamp(report_dir)
