@@ -21,28 +21,30 @@ config = {
     "REPORT_DIR": "./reports",
     "LOG_DIR": "./log"
 }
+def nginx_log_path(log_dir):
+    file_name = 'nginx-access-ui.log-' + datetime.date.today().strftime('%Y%m%d')
+    full_path = os.path.join(log_dir, file_name)
+    if os.path.exists(full_path + '.gz'):
+        return gzip.open(full_path + '.gz','rb'), True
+    elif os.path.exists(full_path):
+        return open(full_path,'r'), False
+    else:
+        return None, None
 
 def parsing(log_dir,report_size):
 
-    file_name = 'nginx-access-ui.log-' + datetime.date.today().strftime('%Y%m%d')
-    full_path = os.path.join(log_dir, file_name)
-    
-    log = None
-    gz = False
-    if os.path.exists(full_path + '.gz'):
-        log = gzip.open(full_path + '.gz','r')
-        gz = True
-    if os.path.exists(full_path):
-        log = open(full_path)
-    if log is None:
-        # Если нечего обрабатывать выходим
-        return log
+    full_path, gziped = nginx_log_path(log_dir)
+    logging.info(full_path)
+    logging.info(gziped)
 
-    # Kоличество записей в логе
-    counter = sum(1 for line in log)
-    log.seek(0)
+    # Если не нашли лог для обработки выходим
+    if full_path is None:
+        logging.error("Log or path %s is not exist",log_dir)
+        return None
 
-    # Счетчик необработанных записей
+    # Счетчик строк в логе
+    line_counter = 0 
+    # Счетчик необработанных строк
     line_counter_error = 0
     #Сумма request_time всех запросов
     request_time_sum = 0
@@ -52,28 +54,29 @@ def parsing(log_dir,report_size):
     # для последующего рассчета необходимых данных
     table_log = {}
 
-    for line in log:
-        try:
-            # Если обрабатываем '.gz'
-            if gz:
-                line = line.decode('utf-8')
-            current_url = line.split(' ')[7]
-            request_time = float(line.split(' ')[-1])
-        except:
-            line_counter_error += 1
-            #Если количество ошибочных записей больше 20% от общего числа выходим с ошибкой
-            if line_counter_error > counter/5:
-                logging.error('Too many errors')
-                return None
-        else:
-            #Добавляем в справочник
+    with full_path as log:
+        for line_counter, line in enumerate(log):
             try:
-                table_log[current_url].append(request_time)
-            except KeyError:
-                #Если еще не встречался такой URL добавляем
-                table_log[current_url] = [request_time]
-            request_time_sum += request_time
-    log.close()
+                if gziped:
+                    line = line.decode('utf-8') # Если обрабатываем '.gz'
+
+                current_url = line.split(' ')[7]
+                request_time = float(line.split(' ')[-1])
+            except:
+                line_counter_error += 1
+            else:
+                #Добавляем в справочник
+                try:
+                    table_log[current_url].append(request_time)
+                except KeyError:
+                    #Если еще не встречался такой URL добавляем
+                    table_log[current_url] = [request_time]
+                request_time_sum += request_time
+
+    # Если процент ошибок больше 20 выходим без формирования отчета.
+    if line_counter_error/(line_counter/100) > 20:
+        logging.error("Too many errors")
+        return None
 
     #Заполняем расчетные поля
     table = [{'count': len(table_log[item]),
@@ -83,7 +86,7 @@ def parsing(log_dir,report_size):
               'url': item,
               'time_med': median(table_log[item]),
               'time_perc': sum(table_log[item])/(request_time_sum/100),
-              'count_perc': len(table_log[item])/(counter/100)} for item in table_log]
+              'count_perc': len(table_log[item])/(line_counter/100)} for item in table_log]
     #Сортируем
     table.sort(key=lambda item : item['time_sum'],reverse=True)
     #Возвращаем REPORT_SIZE строк
@@ -132,9 +135,9 @@ def report_generate(report_dir,report_data):
     daily_report.close()
     return True
 
+# Проходим по 'report.html', заменяем подстроку '$table_json' на report_data
+# и записываем в daily_report.
 def report_generate_new(report_dir,report_data):
-	# Проходим по 'report.html', заменяем подстроку '$table_json' на report_data
-	# и записываем в daily_report.
 	substr = '$table_json'
 	full_path_template = os.path.join(report_dir, 'report.html')
 	
@@ -180,7 +183,7 @@ def main():
         logging.basicConfig(format= u'[%(asctime)s] %(levelname)-6s %(message)s',
                                 filename = os.path.join(log_dir, 'log_analyzer.log'),level = logging.INFO)
     except FileNotFoundError:
-            logging.basicConfig(format=u'[%(asctime)s] %(levelname)-6s %(message)s', filename=None, level=logging.INFO)
+        logging.basicConfig(format=u'[%(asctime)s] %(levelname)-6s %(message)s', filename=None, level=logging.INFO)
     
     try:
         #Если уже существует файл отчета за текущую дату ничего не делаем.
@@ -192,7 +195,6 @@ def main():
         logging.info("Start")
         table = parsing(log_dir,int(config['REPORT_SIZE']))
         if table is None:
-            logging.error("Log or path %s is not exist",log_dir)
             return
 
         report_generate_new(report_dir,str(table))
